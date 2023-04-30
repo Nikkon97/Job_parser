@@ -1,95 +1,197 @@
-import json
 from abc import ABC, abstractmethod
+from global_variables import PRICE_EUR, PRICE_USD, PAGE_COUNT, VACANCY_COUNT, key_job
 
 import requests
+import json
 
 
-class Engine(ABC):
+class ParentApiClass(ABC):
+    """Родительский класс, для классов, которые работают с API"""
+
+    @abstractmethod
     def get_request(self):
         pass
 
+    @abstractmethod
+    def get_vacancies(self):
+        pass
 
-class HeadHunterAPI(Engine):
-    def get_request(self, keyword, page):
-        headers = {
-            "User - Agent": "TestApp/1.0(test@example.com)"
-        }
+
+class ParentJSONSaver(ABC):
+    """Родительский класс для классов, работающих с данными о вакансиях """
+
+    @abstractmethod
+    def add_vacancy(self):
+        pass
+
+    @abstractmethod
+    def select(self):
+        pass
+
+
+class HeadHunterAPI(ParentApiClass):
+    """Класс для работы с API Head Hunter"""
+
+    def get_request(self, key_word, page):
+        """Метод делает запрос на https://api.hh.ru/vacancies и возвращает результат в формате json по ключу [items]"""
         params = {
-            "text": keyword,
+            "text": key_word,
             "page": page,
-            "per_page": 100,
-
+            "per_page": VACANCY_COUNT,
         }
-        return requests.get("https://api.hh.ru/vacancies", params=params, headers=headers).json()["items"]
+        try:
+            return requests.get("https://api.hh.ru/vacancies", params=params).json()["items"]
+        except requests.exceptions.ConnectionError as e:
+            print(e)
+            print("Ошибка при запросе. Ошибка соединения")
 
-    def get_vacancies(self, keyword, count=1000):
-        pages = 1
-        response = []
-        for page in range(pages):
-            print(f"Парсинг страницы {page + 1}", end=": ")
-            values = self.get_request(keyword, page)
-            print(f"Найдено {len(values)} вакансий.")
-            response.extend(values)
+    def get_vacancies(self, key_word):
+        """Функция получает список заданных вакансий по кодовому слову и возвращает его"""
+        data_list = []
+        for x in range(PAGE_COUNT):
+            values = self.get_request(key_word, x)
+            data_list.extend(values)
+        return data_list
 
+
+class SuperJobAPI(ParentApiClass):
+    """Класс для взаимодействия с SuperJobAPI"""
+    page_count = 2
+
+    def get_request(self, key_word, page):
+        auth_data = {'X-Api-App-Id': key_job}
+        params = {
+            "keyword": key_word,
+            "page": page,
+            "count": VACANCY_COUNT,
+        }
+        try:
+            response = requests.get('https://api.superjob.ru/2.0/vacancies/', headers=auth_data, params=params).json()[
+                "objects"]
+        except requests.exceptions.ConnectionError as e:
+            print(e)
+            print("Ошибка при запросе. Ошибка соединения")
         return response
+
+    def get_vacancies(self, key_word):
+        """Функция получает список заданных вакансию по кодовому слову и возвращает его"""
+        data_list = []
+        for x in range(PAGE_COUNT):
+            values = self.get_request(key_word, x)
+            data_list.extend(values)
+        return data_list
 
 
 class Vacancy:
-    __slots__ = (
-        'title', 'salary_min', 'salary_max', 'currency', 'employer', 'link', 'salary_sort_min', 'salary_sort_max')
+    """Класс вакансий"""
 
-    def __init__(self, title, salary_min, salary_max, currency, employer, link):
-        self.title = title
-        self.salary_min = salary_min
-        self.salary_max = salary_max
-        self.currency = currency
-        self.employer = employer
-        self.link = link
-
-        self.salary_sort_min = salary_min
-        self.salary_sort_max = salary_max
-        if currency and currency == 'USD':
-            self.salary_sort_min = self.salary_sort_min * 83 if self.salary_sort_min else None
-            self.salary_sort_max = self.salary_sort_max * 83 if self.salary_sort_max else None
+    def __init__(self, title, salary_from, salary_to, salary_currency, url, employer_name, address):
+        self.__title = title
+        self.__url = url
+        self.__employer_name = employer_name
+        self.__address = address
+        self._salary_from = salary_from
+        self._salary_to = salary_to
+        self._salary_currency = salary_currency
 
     def __str__(self):
-        salary_min = f'От {self.salary_min}' if self.salary_min else ''
-        salary_max = f'До {self.salary_max}' if self.salary_max else ''
-        currency = self.currency if self.currency else ''
-        if self.salary_min is None and self.salary_max is None:
-            salary_min = "Не указана"
-        return f"{self.employer}: {self.title} \n{salary_min} {salary_max} {currency} \nURL: {self.link}"
+        if self._salary_currency:
+            self._salary_currency = f"Зарплата({self._salary_currency}) "
+        else:
+            self._salary_currency = "Зарплата не указана"
+        if self._salary_from:
+            self._salary_from = f"от: {self._salary_from}  "
+        else:
+            self._salary_from = ""
+        if self._salary_to:
+            self._salary_to = f"до: {self._salary_to}"
+        else:
+            self._salary_to = " "
+        if not self.__address:
+            self.__address = "Не указано"
+        msg = f"{self.__employer_name}  :  {self.__title}\n" \
+              f"URL вакансии: {self.__url} \n" \
+              f"{self._salary_currency}{self._salary_from}{self._salary_to}\n" \
+              f"Адрес работодателя: {self.__address}"
+        return msg
 
     def __gt__(self, other):
-        if not other.salary_sort_min:
+        """Метод сравнения по минимальной зарплате"""
+        if not other._salary_from:
             return True
-        if not self.salary_sort_min:
+        if not self._salary_from:
             return False
-        return self.salary_sort_min >= other.salary_sort_min
+        return self._salary_from >= other._salary_from
 
 
-class JSONSaver:
-    def __init__(self, keyword):
-        self.__filename = f'{keyword.title()}.json'
+class JSONSaver(ParentJSONSaver):
+    """Класс для работы с данными о вакансиях"""
+
+    def __init__(self, key_word: str, name_file: str):
+        self.__filename = f"{key_word.title()}_{name_file.lower()}.json"
 
     @property
     def filename(self):
         return self.__filename
 
-    def add_vacancies(self, data):
-        with open(self.__filename, 'w', encoding='utf-8') as file:
+    def add_vacancy(self, data):
+        """Добавляет вакансии в файл 'self.__filename'"""
+        with open(self.__filename, 'w', encoding="UTF-8") as file:
             json.dump(data, file, indent=4, ensure_ascii=False)
 
     def select(self):
-        with open(self.__filename, 'r', encoding="utf-8") as file:
+        """Функция создает экземпляры класса Vacancy с заданными полями.
+         Если указана зарплата, то пересчитывает её в рубли(при необходимости)
+         Возвращает список вакансий
+         """
+        vacansies_list = []
+        salary_from, salary_to, salary_currency = None, None, None
+
+        with open(self.__filename, "r", encoding="UTF-8") as file:
             data = json.load(file)
 
-        vacancies = []
-        for row in data:
-            salary_min, salary_max, currency = None, None, None
-            if row['salary']:
-                salary_min, salary_max, currency = row['salary']['from'], row['salary']['to'], row['salary']['currency']
-            vacancies.append(
-                Vacancy(row['name'], salary_min, salary_max, currency, row['employer']['name'],
-                        row['alternate_url']))
-        return vacancies
+        if "hh" in self.filename:
+            for row in data:
+                if row["salary"] and row["salary"]["to"] and row["salary"]["from"]:
+                    salary_from, salary_to, salary_currency = row["salary"]["from"], row["salary"]["to"], row["salary"][
+                        "currency"]
+                    if row["salary"]["currency"].upper() == "EUR":
+                        salary_from = row["salary"]["from"] * PRICE_EUR
+                        salary_to = row["salary"]["to"] * PRICE_EUR
+                    if row["salary"]["currency"].upper() == "USD":
+                        salary_from = row["salary"]["from"] * PRICE_USD
+                        salary_to = row["salary"]["to"] * PRICE_USD
+                    salary_currency = "RUB"
+
+                vacansies_list.append(Vacancy(
+                    row["name"],
+                    salary_from,
+                    salary_to,
+                    salary_currency,
+                    row["alternate_url"],
+                    row["employer"]["name"],
+                    row["area"]["name"]))
+
+        if "sj" in self.filename:
+            for row in data:
+                if row["currency"]:
+                    salary_from, salary_to, salary_currency = row["payment_from"], row["payment_to"], row["currency"]
+
+                    if row["currency"].upper() == "EUR":
+                        salary_from = row["payment_from"] * PRICE_EUR
+                        salary_to = row["payment_to"] * PRICE_EUR
+                    if row["currency"].upper == "USD":
+                        salary_from = row["payment_from"] * PRICE_USD
+                        salary_to = row["payment_to"] * PRICE_USD
+                    salary_currency = "RUB"
+
+                vacansies_list.append(Vacancy(
+                    row["profession"],
+                    salary_from,
+                    salary_to,
+                    salary_currency,
+                    row["link"],
+                    row["firm_name"],
+                    row["address"]))
+
+        return vacansies_list
